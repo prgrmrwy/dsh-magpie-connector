@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { credentialRef, type CredentialProvider, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import {
-  MAX_LINES, MAX_OWNERS, SettingsStore, isAccessMode, normalizeBaseUrl, validateLoadedLines, validateKnownOwners, validatePendingCredentials,
+  MAX_LINES, MAX_OWNERS, SettingsStore, effectiveBaseUrl, isAccessMode, normalizeBaseUrl, normalizeProxy, validateLoadedLines, validateKnownOwners, validatePendingCredentials,
   type AccessMode, type CredentialField, type LineSettings, type PendingCredential, type Settings,
 } from './settings.js'
-import { GatewayTransport, validateIdentity, type ConnectionIdentity } from './transport.js'
+import { GatewayTransport, isLoopbackBaseUrl, validateIdentity, type ConnectionIdentity } from './transport.js'
 import { LineSelector, type Probe } from './selection.js'
 import { mapCatalog, routeOf, type CatalogModel } from './catalog.js'
 import type { PublishResult } from './registrar.js'
@@ -67,7 +67,7 @@ export const CHECK_REASON_MAX = 300
 /** Longest underlying cause echoed in a settings write failure (redacted first, then truncated). */
 export const WRITE_CAUSE_MAX = 300
 /** Request-body keys a line check accepts; anything else is a shape error. */
-const CHECK_FIELDS = ['id', 'baseUrl', 'accessMode', 'key', 'accessClientId', 'accessClientSecret'] as const
+const CHECK_FIELDS = ['id', 'baseUrl', 'accessMode', 'proxy', 'key', 'accessClientId', 'accessClientSecret'] as const
 const CHECK_CREDENTIALS: CredentialField[] = ['key', 'accessClientId', 'accessClientSecret']
 const LINE_ID_SHAPE = /^[0-9a-f]{8}$/
 const nonEmpty = (value: string | undefined): value is string => typeof value === 'string' && value !== ''
@@ -89,7 +89,7 @@ const randomHexId = (existing: readonly string[]): string => {
 }
 const CONNECTION_FIELDS: CredentialField[] = ['key', 'accessClientId', 'accessClientSecret']
 /** Shape-validated line-check request: draft address/access mode plus explicit credential overrides. */
-interface CheckRequest { id?: string; baseUrl: string; accessMode: AccessMode; explicit: Partial<Record<CredentialField, string>> }
+interface CheckRequest { id?: string; baseUrl: string; accessMode: AccessMode; proxy?: string; explicit: Partial<Record<CredentialField, string>> }
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
 /**
  * The wire contract is a draft subset, not the settings write format: `id` is absent for a brand-new
@@ -110,6 +110,11 @@ function normalizeCheckRequest(body: unknown): CheckRequest {
     if (!isAccessMode(body.accessMode)) throw new Error('Invalid line check accessMode')
     accessMode = body.accessMode
   }
+  let proxy: string | undefined
+  if ('proxy' in body) {
+    if (typeof body.proxy !== 'string') throw new Error('Invalid line check proxy')
+    proxy = body.proxy === '' ? undefined : normalizeProxy(body.proxy)
+  }
   const explicit: Partial<Record<CredentialField, string>> = {}
   for (const field of CHECK_CREDENTIALS) {
     if (!(field in body)) continue
@@ -117,7 +122,7 @@ function normalizeCheckRequest(body: unknown): CheckRequest {
     if (typeof value !== 'string') throw new Error(`Invalid line check ${field}`)
     explicit[field] = value
   }
-  return { ...(id !== undefined ? { id } : {}), baseUrl: body.baseUrl, accessMode, explicit }
+  return { ...(id !== undefined ? { id } : {}), baseUrl: body.baseUrl, accessMode, ...(proxy ? { proxy } : {}), explicit }
 }
 
 /**
@@ -213,7 +218,7 @@ export class MagpieRuntime {
     if (!line.baseUrl || !key) return false
     if (line.accessMode !== 'cloudflare') return true
     if (!accessClientId || !accessClientSecret) return false
-    try { return new URL(line.baseUrl).protocol === 'https:' } catch { return false }
+    try { const target = effectiveBaseUrl(line); return new URL(target).protocol === 'https:' || isLoopbackBaseUrl(target) } catch { return false }
   }
   private rotate(lineId: string, baseUrl: string, accessMode: AccessMode, fingerprint: string, carry?: { catalog: CatalogModel[]; lastSyncAt?: string }) {
     this.current.bgAbort.abort()
@@ -228,7 +233,7 @@ export class MagpieRuntime {
     if (!resolved) return { lineId: '', baseUrl: '', accessMode: 'direct', key: '', accessClientId: '', accessClientSecret: '' }
     const { line, key, accessClientId, accessClientSecret } = resolved
     const cloudflare = line.accessMode === 'cloudflare'
-    return { lineId: line.id, baseUrl: line.baseUrl, accessMode: line.accessMode, key, accessClientId: cloudflare ? accessClientId : '', accessClientSecret: cloudflare ? accessClientSecret : '' }
+    return { lineId: line.id, baseUrl: effectiveBaseUrl(line), accessMode: line.accessMode, key, accessClientId: cloudflare ? accessClientId : '', accessClientSecret: cloudflare ? accessClientSecret : '' }
   }
   private fingerprintOf(identity: ConnectionIdentity): string {
     if (!identity.lineId && !identity.baseUrl && !identity.key) return ''
@@ -460,7 +465,8 @@ export class MagpieRuntime {
       const baseUrl = 'baseUrl' in entry ? (entry.baseUrl === '' ? '' : normalizeBaseUrl(entry.baseUrl)) : previous?.baseUrl ?? ''
       const accessMode = 'accessMode' in entry ? entry.accessMode : previous?.accessMode ?? 'direct'
       if (!isAccessMode(accessMode)) throw new Error('Invalid accessMode')
-      nextLines.push({ id: lineId, baseUrl, accessMode })
+      const proxy = 'proxy' in entry ? (entry.proxy === '' || entry.proxy === null ? undefined : normalizeProxy(entry.proxy)) : previous?.proxy
+      nextLines.push({ id: lineId, baseUrl, accessMode, ...(proxy ? { proxy } : {}) })
       for (const field of CONNECTION_FIELDS) {
         if (!(field in entry)) continue
         const value = entry[field]
@@ -495,7 +501,8 @@ export class MagpieRuntime {
     }
     for (const line of nextLines) {
       if (line.accessMode !== 'cloudflare') continue
-      if (!line.baseUrl.startsWith('https:')) throw new Error('MAGPIE_ACCESS_HTTPS_REQUIRED')
+      const target = effectiveBaseUrl(line)
+      if (!target.startsWith('https:') && !isLoopbackBaseUrl(target)) throw new Error('MAGPIE_ACCESS_HTTPS_REQUIRED')
       const supplied = new Map(writes.filter(write => write.lineId === line.id).map(write => [write.field, write.value]))
       const resolved = await this.resolveLine(byId.get(line.id) ?? line)
       const effective = (field: 'accessClientId' | 'accessClientSecret') => {
@@ -591,6 +598,7 @@ export class MagpieRuntime {
       const [key, clientId, clientSecret] = await Promise.all(Object.values(refs).map(ref => this.credentials.describe(ref)))
       return {
         id: resolved.line.id, baseUrl: resolved.line.baseUrl, accessMode: resolved.line.accessMode, complete: resolved.complete,
+        ...(resolved.line.proxy ? { proxy: resolved.line.proxy } : {}),
         key: status(key!), access: { clientId: status(clientId!), clientSecret: status(clientSecret!) },
         refs: { key: String(refs.key), accessClientId: String(refs.accessClientId), accessClientSecret: String(refs.accessClientSecret) },
       }
@@ -676,11 +684,12 @@ export class MagpieRuntime {
         if (clientSecret === '') clientSecret = resolved.accessClientSecret
       }
       if (!key) return done({ kind: 'incomplete', reason: 'missing key' })
+      const target = effectiveBaseUrl({ baseUrl, ...(request.proxy ? { proxy: request.proxy } : {}) })
       if (accessMode === 'cloudflare') {
-        if (new URL(baseUrl).protocol !== 'https:') return done({ kind: 'incomplete', reason: 'cloudflare requires https' })
+        if (new URL(target).protocol !== 'https:' && !isLoopbackBaseUrl(target)) return done({ kind: 'incomplete', reason: 'cloudflare requires https' })
         if (!clientId || !clientSecret) return done({ kind: 'incomplete', reason: 'missing access credentials' })
       } else { clientId = ''; clientSecret = '' }
-      const identity: ConnectionIdentity = { baseUrl, key, accessClientId: clientId, accessClientSecret: clientSecret, accessMode }
+      const identity: ConnectionIdentity = { baseUrl: target, key, accessClientId: clientId, accessClientSecret: clientSecret, accessMode }
       try { validateIdentity(identity) } catch (error) { return done({ kind: 'invalid', reason: this.trimReason(errorText(error)) }) }
       release = this.retainIdentity(identity)
       const response = await this.transport.request(identity, 'GET', '/models', { signal: controller.signal })

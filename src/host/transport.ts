@@ -15,13 +15,28 @@ export interface ConnectionIdentity {
 
 /** Errors proving the request never left this host (DNS/build failures). */
 const CONNECTION_PHASE_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'])
+/** Hostnames only reachable from this machine. */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost'])
+/**
+ * A base URL that never leaves this machine: plain HTTP to a loopback host. Local sidecars — a
+ * context-compression proxy such as billion-context (`http://127.0.0.1:<port>/bili/<protocol>/<origin>/v1`),
+ * a tunnel, a same-host relay — terminate the TLS hop themselves and forward upstream, so the Access
+ * credentials only ever cross the loopback interface. Such a URL is exempt from the HTTPS-only rule;
+ * everything else still has to be HTTPS before Access credentials are attached.
+ */
+export function isLoopbackBaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname.toLowerCase().replace(/^\[|\]$/g, ''))
+  } catch { return false }
+}
 
 export function validateIdentity(identity: ConnectionIdentity) {
   const { accessClientId: id = '', accessClientSecret: secret = '' } = identity
   if (!!id !== !!secret) throw new Error('MAGPIE_ACCESS_PAIR_REQUIRED')
   if ([id, secret].some(value => value && (value.length > 512 || /[^\x21-\x7e]/.test(value)))) throw new Error('MAGPIE_ACCESS_INVALID')
   if (identity.accessMode === 'cloudflare' && !(id && secret)) throw new Error('MAGPIE_ACCESS_PAIR_REQUIRED')
-  if (id && identity.baseUrl && new URL(identity.baseUrl).protocol !== 'https:') throw new Error('MAGPIE_ACCESS_HTTPS_REQUIRED')
+  if (id && identity.baseUrl && new URL(identity.baseUrl).protocol !== 'https:' && !isLoopbackBaseUrl(identity.baseUrl)) throw new Error('MAGPIE_ACCESS_HTTPS_REQUIRED')
 }
 const allowed = new Set(['GET /models', 'POST /responses', 'POST /chat/completions', 'GET /magpie/quotas/cards', 'POST /magpie/quotas/refresh', 'POST /magpie/quotas/codex-reset'])
 /**

@@ -35,13 +35,12 @@ test('test_line_access_02 spec Scenario "切回直连并保存即清除 Access �
 })
 
 test('test_line_access_03 spec Scenario "Access 线路必须是 https"', async () => {
-  const gateway = await createGateway(); cleanup.push(gateway.close)
   const credentials = lineCredentials('K1')
-  const store = memoryStore([line(gateway.baseUrl)])
+  const store = memoryStore([line('http://gateway.invalid/v1')])
   const runtime = new MagpieRuntime(credentials.service, store)
   cleanup.push(() => runtime.dispose())
   const before = credentials.writes.length
-  const response = await runtime.settings({ lines: [{ id: LINE_ID, baseUrl: gateway.baseUrl, accessMode: 'cloudflare', accessClientId: 'cf', accessClientSecret: 'secret' }] })
+  const response = await runtime.settings({ lines: [{ id: LINE_ID, baseUrl: 'http://gateway.invalid/v1', accessMode: 'cloudflare', accessClientId: 'cf', accessClientSecret: 'secret' }] })
   expect(response.status).toBe(400)
   expect(credentials.writes.length).toBe(before)
   expect((await (await runtime.settings()).json() as { lines: { accessMode: string }[] }).lines[0]?.accessMode).toBe('direct')

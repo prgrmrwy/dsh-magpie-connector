@@ -6,7 +6,17 @@ import type { SidebarWindowKind } from '../shared/sidebar-window.js'
 export type AccessMode = 'direct' | 'cloudflare'
 export type CredentialField = 'key' | 'accessClientId' | 'accessClientSecret'
 /** One configured Magpie ingress line: address + its own credentials binding. */
-export interface LineSettings { id: string; baseUrl: string; accessMode: AccessMode }
+export interface LineSettings {
+  id: string
+  baseUrl: string
+  accessMode: AccessMode
+  /**
+   * Optional local hop in front of the gateway address: an HTTP endpoint that receives
+   * `<proxy>/<baseUrl><path>`, e.g. a context-compression proxy (`http://127.0.0.1:18801/bili/openai`).
+   * Kept apart from `baseUrl` so the line still shows the real gateway address.
+   */
+  proxy?: string
+}
 /** A credential write that may have been attempted by a settings write. */
 export interface PendingCredential { lineId: string; field: CredentialField }
 
@@ -50,6 +60,19 @@ export function normalizeBaseUrl(value: unknown): string {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || !/\/v\d+$/.test(url.pathname.replace(/\/+$/, ''))) throw new Error('Invalid baseUrl')
   return url.href.replace(/\/+$/, '')
 }
+/**
+ * Normalize the optional local hop in front of a line: any http(s) origin plus an optional path,
+ * without credentials, query or fragment. Trailing slashes are dropped so the composed address never
+ * grows a double slash.
+ */
+export function normalizeProxy(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('Invalid proxy')
+  const url = new URL(value)
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Invalid proxy')
+  return url.href.replace(/\/+$/, '')
+}
+/** Address requests are actually sent to: the line address, optionally behind the local hop. */
+export const effectiveBaseUrl = (line: { baseUrl: string; proxy?: string }): string => line.proxy ? `${line.proxy}/${line.baseUrl}` : line.baseUrl
 
 export const MAX_LINES = 5
 export const MAX_OWNERS = 32
@@ -66,7 +89,8 @@ export function normalizeLineSettings(value: unknown): LineSettings {
   const baseUrl = line.baseUrl === '' ? '' : normalizeBaseUrl(line.baseUrl)
   const accessMode = line.accessMode ?? 'direct'
   if (!isAccessMode(accessMode)) throw new Error('Invalid accessMode')
-  return { id: line.id, baseUrl, accessMode }
+  const proxy = line.proxy === undefined || line.proxy === '' ? undefined : normalizeProxy(line.proxy)
+  return { id: line.id, baseUrl, accessMode, ...(proxy ? { proxy } : {}) }
 }
 
 /**

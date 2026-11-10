@@ -28,7 +28,7 @@ export interface ModelRow { id: string; name?: string; efforts?: string[]; visib
 export interface ModelGroup { provider: string; models: ModelRow[] }
 export type SyncErrorKind = 'unauthorized' | 'forbidden' | 'http' | 'unreachable' | 'settings' | 'registration'
 export interface LineView {
-  id?: string; baseUrl?: string; accessMode?: 'direct' | 'cloudflare'; complete?: boolean
+  id?: string; baseUrl?: string; accessMode?: 'direct' | 'cloudflare'; proxy?: string; complete?: boolean
   key?: { configured?: boolean; writable?: boolean }
   access?: { clientId?: { configured?: boolean; writable?: boolean }; clientSecret?: { configured?: boolean; writable?: boolean } }
   refs?: { key?: string; accessClientId?: string; accessClientSecret?: string }
@@ -80,8 +80,8 @@ export function parseCheck(body: unknown): CheckSnapshot | undefined {
 }
 
 /** Everything that makes a snapshot stale for one card: identity plus unsaved credential edits. */
-export const checkSignature = (draft: { id?: string | undefined; baseUrl: string; accessMode: string; apiKey: string; accessClientId: string; accessClientSecret: string }) =>
-  JSON.stringify([draft.id ?? null, draft.baseUrl.trim(), draft.accessMode, draft.apiKey, draft.accessClientId, draft.accessClientSecret])
+export const checkSignature = (draft: { id?: string | undefined; baseUrl: string; accessMode: string; proxy?: string | undefined; apiKey: string; accessClientId: string; accessClientSecret: string }) =>
+  JSON.stringify([draft.id ?? null, draft.baseUrl.trim(), draft.accessMode, draft.proxy?.trim() ?? '', draft.apiKey, draft.accessClientId, draft.accessClientSecret])
 
 /** Cached catalog ids the snapshot is compared against (never the live "current line" catalog). */
 export const cacheIds = (groups: ModelGroup[] | undefined): string[] => (groups ?? []).flatMap(group => group.models.map(model => model.id))

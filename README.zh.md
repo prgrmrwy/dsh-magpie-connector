@@ -45,8 +45,9 @@ dsh plugin --profile web add dsh-magpie-connector
 
 1. 在**线路 1** 里填写**包含 `/v1`** 的网关 API 地址，例如 `http://192.168.1.20:3425/v1`，以及这条线路的 gateway key。地址、线路列表、可见性与默认 effort 保存在 `$DSH_HOME/plugins/dsh-magpie-connector/settings.json` —— key/Access 不会写入该文件，也不会被设置接口返回。
 2. 需要多条线路时点「添加备用线路」，每条线路填写自己的地址与 key；用「上移/下移」调整优先级（序号 1 优先）。保存后打开设置页默认只展开当前生效线路，序号后的 4×4 绿色方块表示当前线路；点击 info 图标可查看优先级与自动回退说明。
-3. 每条线路的**高级连接**里选择「直连」或「Cloudflare Access」。局域网与 Tailscale 都属于直连；Cloudflare Access 需要 HTTPS 线路，从 Access 切回直连并保存会清除该线路的两项 Access 凭据。Cloudflare 免费/Pro 套餐在源站 100 秒内没有响应时会返回 524。
+3. 每条线路的**高级连接**里选择「直连」或「Cloudflare Access」。局域网与 Tailscale 都属于直连；Cloudflare Access 需要 HTTPS 线路（回环地址/回环前缀除外，见第 5 条），从 Access 切回直连并保存会清除该线路的两项 Access 凭据。Cloudflare 免费/Pro 套餐在源站 100 秒内没有响应时会返回 524。
 4. 保存会同步模型目录；「刷新模型列表」可再次同步，插件不会定时轮询目录。
+5. 线路地址前面还有一层**本机代理**（例如把 [billion-context](https://github.com/ranxianglei/billion-context) 的上下文压缩接进来）时，填「**本机代理前缀**」：请求会发往 `<前缀>/<网关地址>`，「网关地址」仍填真实网关。例如前缀 `http://127.0.0.1:18801/bili/openai` + 地址 `https://magpie.abworks.cn/v1` → 实际请求 `http://127.0.0.1:18801/bili/openai/https://magpie.abworks.cn/v1/…`。回环前缀（`127.0.0.1` / `[::1]` / `localhost`）在 Cloudflare Access 模式下也能保存（TLS 由那一层服务对上游终止，Access 凭证只经过回环）；其它前缀仍必须是 `https://`。把前缀直接写进「网关地址」的旧写法继续兼容。
 
 > **0.2.0 BREAKING 升级**：设置格式改为单一 `lines[]`，旧版单地址 `settings.json`（只有 `baseUrl`）与旧固定凭据引用（`MAGPIE_API_KEY` / `MAGPIE_ACCESS_*`）**不会被读取或迁移**，升级后需在设置页重新添加线路并填写每线路 key/Access。模型可见性与默认 effort 会保留；旧凭据记录可由你在 DSH credentials 中手动删除。升级前若要保留回滚能力，请备份 `settings.json` 与旧凭据引用。
 

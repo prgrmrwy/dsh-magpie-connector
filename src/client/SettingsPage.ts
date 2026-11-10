@@ -412,7 +412,7 @@ const ACCESS_MODES: { id: AccessMode; labelKey: MagpieKey }[] = [{ id: 'direct',
 const hostnameOf = (baseUrl: string) => { try { return new URL(baseUrl).hostname || baseUrl } catch { return baseUrl || t('hostnameUnset') } }
 
 interface LineDraft {
-  draftId: string; id?: string; baseUrl: string; accessMode: AccessMode; savedAccess: boolean
+  draftId: string; id?: string; baseUrl: string; proxy: string; accessMode: AccessMode; savedAccess: boolean
   keyConfigured: boolean; keyWritable: boolean; apiKey: string
   accessConfigured: boolean; accessWritable: boolean; accessClientId: string; accessClientSecret: string
   /** Host-reported completeness of the saved line (never of the unsaved draft). */
@@ -421,15 +421,15 @@ interface LineDraft {
 
 function lineDrafts(settings: SettingsView): LineDraft[] {
   const configured = (access: { clientId?: { configured?: boolean }; clientSecret?: { configured?: boolean } } | undefined) => access?.clientId?.configured === true || access?.clientSecret?.configured === true
-  const source = (settings.lines ?? []).map(line => ({ id: line.id, baseUrl: line.baseUrl ?? '', accessMode: (line.accessMode ?? 'direct') as AccessMode, key: line.key, access: line.access, complete: line.complete !== false }))
+  const source = (settings.lines ?? []).map(line => ({ id: line.id, baseUrl: line.baseUrl ?? '', proxy: line.proxy ?? '', accessMode: (line.accessMode ?? 'direct') as AccessMode, key: line.key, access: line.access, complete: line.complete !== false }))
   return source.map((line, index) => ({
-    draftId: line.id ?? `new-${index}`, ...(line.id ? { id: line.id } : {}), baseUrl: line.baseUrl, accessMode: line.accessMode,
+    draftId: line.id ?? `new-${index}`, ...(line.id ? { id: line.id } : {}), baseUrl: line.baseUrl, proxy: line.proxy, accessMode: line.accessMode,
     savedAccess: line.accessMode === 'cloudflare', keyConfigured: line.key?.configured === true, keyWritable: line.key?.writable !== false, apiKey: '',
     accessConfigured: configured(line.access), accessWritable: line.access?.clientId?.writable !== false && line.access?.clientSecret?.writable !== false,
     accessClientId: '', accessClientSecret: '', complete: line.complete,
   }))
 }
-const lineSignature = (draft: LineDraft) => JSON.stringify([draft.id ?? null, draft.baseUrl.trim(), draft.accessMode])
+const lineSignature = (draft: LineDraft) => JSON.stringify([draft.id ?? null, draft.baseUrl.trim(), draft.proxy.trim(), draft.accessMode])
 
 function Connection({ settings, saving, mutateSettings, api, usage, latency, onRefreshLatency }: { settings: SettingsView; saving: boolean; mutateSettings: SettingsMutation; api: Api; usage: ReactNode; latency: LatencyState; onRefreshLatency: (lineId: string) => void }) {
   const baseline = lineDrafts(settings)
@@ -488,7 +488,7 @@ function Connection({ settings, saving, mutateSettings, api, usage, latency, onR
     return current.filter(draft => draft.draftId !== draftId)
   })
   const add = () => setDrafts(current => {
-    const draft: LineDraft = { draftId: `new-${current.length}-${Date.now()}`, baseUrl: '', accessMode: 'direct', savedAccess: false, keyConfigured: false, keyWritable: true, apiKey: '', accessConfigured: false, accessWritable: true, accessClientId: '', accessClientSecret: '', complete: false }
+    const draft: LineDraft = { draftId: `new-${current.length}-${Date.now()}`, baseUrl: '', proxy: '', accessMode: 'direct', savedAccess: false, keyConfigured: false, keyWritable: true, apiKey: '', accessConfigured: false, accessWritable: true, accessClientId: '', accessClientSecret: '', complete: false }
     pendingDraftId.current = draft.draftId
     setExpanded(draft.draftId); return [...current, draft]
   })
@@ -521,6 +521,8 @@ function Connection({ settings, saving, mutateSettings, api, usage, latency, onR
     const lines = drafts.map(draft => ({
       ...(draft.id ? { id: draft.id } : {}),
       baseUrl: draft.baseUrl.trim(), accessMode: draft.accessMode,
+      // Only when it changes: an untouched prefix must not enter the payload (and clearing sends '').
+      ...(draft.proxy.trim() !== (settings.lines?.find(entry => entry.id === draft.id)?.proxy ?? '') ? { proxy: draft.proxy.trim() } : {}),
       ...(draft.apiKey ? { key: draft.apiKey } : {}),
       ...(draft.accessMode === 'cloudflare'
         ? { ...(draft.accessClientId ? { accessClientId: draft.accessClientId } : {}), ...(draft.accessClientSecret ? { accessClientSecret: draft.accessClientSecret } : {}) }
@@ -537,6 +539,7 @@ function Connection({ settings, saving, mutateSettings, api, usage, latency, onR
     setCheckErrors(current => { const next = { ...current }; delete next[draft.draftId]; return next })
     try {
       const body: Record<string, unknown> = { baseUrl: draft.baseUrl.trim(), accessMode: draft.accessMode }
+      if (draft.proxy.trim() !== (settings.lines?.find(entry => entry.id === draft.id)?.proxy ?? '')) body.proxy = draft.proxy.trim()
       if (draft.id) body.id = draft.id
       if (draft.apiKey) body.key = draft.apiKey
       if (draft.accessMode === 'cloudflare') {
@@ -657,6 +660,9 @@ function LineCard({ draft, index, total, saving, active, expanded, latency, chec
     expanded ? h('div', { className: 'dmg-line-body', id: bodyId },
       h('label', { className: 'dmg-field' }, h('span', null, t('baseUrlLabel')),
         h('input', { className: 'dmg-input', value: draft.baseUrl, disabled: saving, placeholder: 'http://127.0.0.1:3425/v1', onChange: (e: { target: { value: string } }) => onChange({ baseUrl: e.target.value }) })),
+      h('label', { className: 'dmg-field' }, h('span', null, t('proxyLabel')),
+        h('input', { className: 'dmg-input', 'data-proxy': '', value: draft.proxy, disabled: saving, placeholder: 'http://127.0.0.1:18801/bili/openai', onChange: (e: { target: { value: string } }) => onChange({ proxy: e.target.value }) }),
+        h('p', { className: 'dmg-hint' }, t('proxyHint'))),
       h('label', { className: 'dmg-field' }, h('span', null, t('apiKeyLabel', { state: `${draft.keyConfigured ? t('configured') : t('notConfigured')}${draft.keyWritable ? '' : t('readonlyFromEnv')}` })),
         h('input', { className: 'dmg-input', type: 'password', autoComplete: 'off', value: draft.apiKey, disabled: saving || !draft.keyWritable,
           placeholder: draft.keyConfigured ? t('keepBlank') : t('required'), onChange: (e: { target: { value: string } }) => onChange({ apiKey: e.target.value }) })),
