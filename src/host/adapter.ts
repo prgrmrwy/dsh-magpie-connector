@@ -9,6 +9,7 @@ import type { MagpieRuntime, Operation } from './runtime.js'
 import { TRANSPORT_ID, isMagpieRoute, ownerLabel, ownerOfRoute, type CatalogModel } from './catalog.js'
 import { visibleCatalog } from './visibility.js'
 import { withDefaultEffort } from './default-effort.js'
+import { imageModalities } from './image-input.js'
 const provider = createProvider({ id:TRANSPORT_ID,auth:{apiKey:{name:'Gateway key',resolve:async()=>undefined}},models:[],api:{'openai-completions':chat,'openai-responses':responses} })
 const emptyUsage = (): Usage => ({input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}})
 const record = (value:unknown):Record<string,unknown>|undefined => typeof value==='object'&&value!==null&&!Array.isArray(value)?value as Record<string,unknown>:undefined
@@ -104,15 +105,18 @@ export class MagpieAdapter extends LlmAdapter {
   override providerRetryPolicy() { return RETRY_POLICY }
   /** Look the model up by id in the whole catalog (route-independent); the returned provider is the requested route. */
   private entryFor(op:Operation,route:string,id:string):CatalogModel {
-    const entry=structuredClone(op.gen.catalog.find(m=>m.info.id===id)??{info:{provider:route,id,name:id,inputModalities:['text']},provider:id.split('/')[0]!,owner:ownerOfRoute(route),efforts:[],nativeEndpoints:[],serviceTiers:[]}) as CatalogModel
-    entry.info={...withDefaultEffort(entry,this.runtime.store.value.defaultEfforts),provider:route}
+    const imagePolicy=this.runtime.imagePolicy
+    const entry=structuredClone(op.gen.catalog.find(m=>m.info.id===id)??{info:{provider:route,id,name:id,inputModalities:['text']},provider:id.split('/')[0]!,owner:ownerOfRoute(route),efforts:[],nativeEndpoints:[],serviceTiers:[],declaredModalities:[]}) as CatalogModel
+    // Preferences are applied at read time, so a toggle takes effect without re-syncing the catalog.
+    entry.info={...withDefaultEffort(entry,this.runtime.store.value.defaultEfforts),inputModalities:imageModalities(entry,imagePolicy),provider:route}
     return entry
   }
   override async listModels(route:string) {
     const op=await this.runtime.beginOperation()
     try {
       const owner=ownerOfRoute(route)
-      return visibleCatalog(op.gen.catalog.filter(m=>this.runtime.ownerOf(m)===owner),this.runtime.store.value.visibleModels).map(m=>({...structuredClone(withDefaultEffort(m,this.runtime.store.value.defaultEfforts)),provider:route}))
+      const imagePolicy=this.runtime.imagePolicy
+      return visibleCatalog(op.gen.catalog.filter(m=>this.runtime.ownerOf(m)===owner),this.runtime.store.value.visibleModels).map(m=>({...structuredClone(withDefaultEffort(m,this.runtime.store.value.defaultEfforts)),inputModalities:imageModalities(m,imagePolicy),provider:route}))
     } finally {op.release()}
   }
   override async resolveModel(route:string,id:string) {

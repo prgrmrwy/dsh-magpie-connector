@@ -22,3 +22,24 @@ test('spec Scenario "非法容量值视为缺失"', () => {
   for (const m of result) { expect(m.info).not.toHaveProperty('context'); expect(m.info).not.toHaveProperty('defaultMaxTokens') }
 })
 test('spec Scenario "畸形条目被丢弃"', () => expect(mapCatalog({ data: [{ name: 'bad' }, { id: 'a' }, { id: 'b' }] })).toHaveLength(2))
+test('a saved image override only fills a missing gateway declaration', () => {
+  const body = { data: [
+    { id: 'opendesign/deepseek-v4.1-flash' },
+    { id: 'deepseek/deepseek-v4-pro', modalities: { input: ['text'] } },
+    { id: 'claude/claude-haiku-5-5', modalities: { input: ['text', 'image'] } },
+  ] }
+  // Undeclared accepts by default, as before 0.2.3's declaration gate; a declaration always wins.
+  expect(mapCatalog(body).map(m => m.info.inputModalities)).toEqual([['text', 'image'], ['text'], ['text', 'image']])
+  const saved = { default: false, overrides: { 'opendesign/deepseek-v4.1-flash': true, 'deepseek/deepseek-v4-pro': true, 'claude/claude-haiku-5-5': true } }
+  const result = mapCatalog(body, saved)
+  // Declared images stay declared; a declared text-only model stays text-only; only the gap is filled.
+  expect(result.map(m => m.info.inputModalities)).toEqual([['text', 'image'], ['text'], ['text', 'image']])
+  expect(result.map(m => m.declaredModalities)).toEqual([[], ['text'], ['text', 'image']])
+})
+test('the raw declaration survives mapping so a preference re-read never outranks it', () => {
+  const [declared, silent] = mapCatalog({ data: [{ id: 'a', modalities: { input: ['text'] } }, { id: 'b' }] }, { default: false, overrides: { a: true, b: true } })
+  expect(declared?.declaredModalities).toEqual(['text'])
+  expect(silent?.declaredModalities).toEqual([])
+  expect(declared?.info.inputModalities).toEqual(['text'])
+  expect(silent?.info.inputModalities).toEqual(['text', 'image'])
+})

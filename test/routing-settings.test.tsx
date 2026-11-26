@@ -81,7 +81,8 @@ test('test_routing_settings_05 spec Scenario "路由组分区说明与无编辑�
   expect(zh.routingGroupsHint).toBe('在 Magpie 中新建和编辑路由组；这里决定是否在 DSH 显示及默认推理强度')
   expect(en.routingGroupsHint).toBeTruthy()
   const controls = [...p.querySelectorAll('input, select, button, a, textarea')]
-  expect(controls.map(c => c.tagName.toLowerCase()).sort()).toEqual(['button', 'input', 'select'])
+  // One checkbox per row for visibility, one for the image preference, one effort select, one reset button.
+  expect(controls.map(c => c.tagName.toLowerCase()).sort()).toEqual(['button', 'input', 'input', 'select'])
   expect(text(p.querySelector('button'))).toBe(zh.followCatalog)
 })
 

@@ -25,6 +25,17 @@ export interface Settings {
   sidebarUsage?: boolean
   /** Sidebar card auto-refresh interval in whole minutes; 0 disables, absent = 5. */
   sidebarRefreshMinutes?: number
+  /**
+   * Whether a model the gateway declared no `modalities` for receives images.
+   * Absent = `true`, the behaviour every DSH release before 0.2.3 had; a gateway
+   * declaration always wins over it.
+   */
+  imageDefault?: boolean
+  /**
+   * Per-model exceptions to {@link imageDefault}, keyed by model id. Absent = none;
+   * a key equal to the default is never stored, and a gateway declaration wins.
+   */
+  imageOverrides?: Record<string, boolean>
   /** Gateway windows the sidebar card lists, canonically ordered; absent = `['weekly']`. */
   sidebarWindows?: SidebarWindowKind[]
   /** 0.6.7 legacy single tier; read once for migration, never written. */
@@ -53,6 +64,7 @@ export function normalizeBaseUrl(value: unknown): string {
 
 export const MAX_LINES = 5
 export const MAX_OWNERS = 32
+export const MAX_IMAGE_MODELS = 200
 const OWNER_KEY = /^[a-z0-9][a-z0-9._-]*$/
 export const LINE_ID_PATTERN = /^[0-9a-f]{8}$/
 export const isAccessMode = (value: unknown): value is AccessMode => value === 'direct' || value === 'cloudflare'
@@ -123,4 +135,35 @@ export function validateKnownOwners(value: unknown): string[] {
   for (const key of value) if (typeof key !== 'string' || key.length < 1 || key.length > 48 || !OWNER_KEY.test(key)) throw new Error('Invalid knownOwners')
   if (new Set(value).size !== value.length) throw new Error('Invalid knownOwners')
   return [...value] as string[]
+}
+
+/**
+ * Load-time check of `imageDefault`: missing = `true`, the behaviour every DSH
+ * release before 0.2.3's declaration gate had. Anything else throws so the caller
+ * falls back instead of trusting a malformed value.
+ */
+export function validateImageDefault(value: unknown): boolean {
+  if (value === undefined) return true
+  if (typeof value !== 'boolean') throw new Error('Invalid imageDefault')
+  return value
+}
+
+/**
+ * Load-time check of `imageOverrides`: missing = none; at most
+ * {@link MAX_IMAGE_MODELS} entries, each key a non-empty model id and each value a
+ * boolean. Any violation throws so the caller reads the whole map as empty instead
+ * of trusting part of it.
+ */
+export function validateImageOverrides(value: unknown): Record<string, boolean> {
+  if (value === undefined) return {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid imageOverrides')
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length > MAX_IMAGE_MODELS) throw new Error('Invalid imageOverrides')
+  const out: Record<string, boolean> = {}
+  for (const [id, image] of entries) {
+    if (typeof id !== 'string' || !id || id.length > 256) throw new Error('Invalid imageOverrides')
+    if (typeof image !== 'boolean') throw new Error('Invalid imageOverrides')
+    out[id] = image
+  }
+  return out
 }

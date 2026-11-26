@@ -5,6 +5,10 @@
  */
 import { birdSvg } from './bird-svg.js'
 
+const imageIconSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="2.3" y="3.3" width="11.4" height="9.4" rx="2.2"/><circle cx="6.1" cy="6.9" r="1.05" fill="#000" stroke="none"/><path d="M3.1 11.6 6.3 8.4l1.4 1.3 2.1-2.1 2.8 2.9"/></svg>'
+
+const imageMask = `-webkit-mask-image:url("data:image/svg+xml,${encodeURIComponent(imageIconSvg)}");mask-image:url("data:image/svg+xml,${encodeURIComponent(imageIconSvg)}");-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:center;mask-position:center;-webkit-mask-size:contain;mask-size:contain`
+
 const birdMask = `-webkit-mask-image:url("data:image/svg+xml,${encodeURIComponent(birdSvg)}");mask-image:url("data:image/svg+xml,${encodeURIComponent(birdSvg)}");-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:center;mask-position:center;-webkit-mask-size:contain;mask-size:contain`
 
 export const settingsCss = `
@@ -68,8 +72,17 @@ export const settingsCss = `
 .dmg-check-row input{margin:2px 0 0}
 .dmg-models{display:flex;flex-direction:column}
 .dmg-model{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:.5px solid var(--dsw-alias-border-l2)}
-.dmg-model label{display:flex;align-items:center;gap:6px;min-width:0;flex:1}
-.dmg-model label>span{overflow-wrap:anywhere}
+.dmg-model label.dmg-model-name{display:flex;align-items:center;gap:6px;min-width:0;flex:1}
+.dmg-model label.dmg-model-name>span{overflow-wrap:anywhere}
+/* The per-model image switch: a 22px icon chip that sits next to the effort select. */
+.dmg-image{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:none;border-radius:6px;cursor:pointer}
+.dmg-image input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
+.dmg-image-glyph{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;color:var(--dsw-alias-label-dimmed);transition:background-color .12s ease,color .12s ease}
+.dmg-image-icon{width:15px;height:15px;background-color:currentColor;${imageMask}}
+.dmg-image:hover input:not(:disabled)+.dmg-image-glyph{background:var(--dsw-alias-interactive-bg-hover)}
+.dmg-image input:checked+.dmg-image-glyph{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
+.dmg-image input:focus-visible+.dmg-image-glyph{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+.dmg-image input:disabled+.dmg-image-glyph{opacity:.45}
 .dmg-model code{font-size:11px;color:var(--dsw-alias-label-tertiary)}
 .dmg-info{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;border:.5px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-tertiary);font-size:11px;cursor:default}
 .dmg-lines{display:flex;flex-direction:column;gap:8px}

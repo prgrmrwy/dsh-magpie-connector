@@ -28,7 +28,14 @@ interface ClientContext {
 export const name = 'dsh-magpie-connector/client'
 export const inject = ['slots', 'locale']
 
-export function apply(ctx: ClientContext, api: Api = createFetchApi()): void {
+export function apply(ctx: ClientContext, config?: unknown): void {
+  // The client module system hands every face its row configuration as the second
+  // argument (`internal/config` sync). This parameter is therefore NOT a slot for a
+  // service: on DSH >= 0.2.3 it arrives as a plain object, and taking the API here
+  // turned every injected `api` into a non-function — the settings section crashed
+  // in `slot entry crashed in 'settings.section': TypeError: api is not a function`.
+  // Tests may still hand a fake API through it, so a function keeps working.
+  const api: Api = typeof config === 'function' ? config as Api : createFetchApi()
   // Return the locale disposer: a client bundle rebuilt while the page is open
   // re-applies this entry against the same long-lived locale service, which
   // refuses a namespace it already holds ("already has locale"). Leaking the

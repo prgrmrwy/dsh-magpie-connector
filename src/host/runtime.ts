@@ -1,12 +1,13 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { credentialRef, type CredentialProvider, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import {
-  MAX_LINES, MAX_OWNERS, SettingsStore, isAccessMode, normalizeBaseUrl, validateLoadedLines, validateKnownOwners, validatePendingCredentials,
+  MAX_LINES, MAX_OWNERS, SettingsStore, isAccessMode, normalizeBaseUrl, validateImageDefault, validateImageOverrides, validateLoadedLines, validateKnownOwners, validatePendingCredentials,
   type AccessMode, type CredentialField, type LineSettings, type PendingCredential, type Settings,
 } from './settings.js'
 import { GatewayTransport, validateIdentity, type ConnectionIdentity } from './transport.js'
 import { LineSelector, type Probe } from './selection.js'
-import { ROUTING_OWNER, mapCatalog, routeOf, type CatalogModel } from './catalog.js'
+import { DEFAULT_IMAGE_POLICY, ROUTING_OWNER, mapCatalog, routeOf, type CatalogModel, type ImagePolicy } from './catalog.js'
+import { acceptsImagesFor, hasDeclaredModalities } from './image-input.js'
 import type { PublishResult } from './registrar.js'
 import { DEFAULT_SIDEBAR_WINDOWS, migrateLegacySidebarWindow, normalizeSidebarWindows, type SidebarWindowKind } from '../shared/sidebar-window.js'
 
@@ -170,6 +171,13 @@ export class MagpieRuntime {
     return result
   }
   /**
+   * Saved image-input policy, load-validated on every read: a malformed persisted
+   * value falls back to the shipped policy instead of a half-trusted one.
+   */
+  get imagePolicy(): ImagePolicy {
+    try { return { default: validateImageDefault(this.store.value.imageDefault), overrides: validateImageOverrides(this.store.value.imageOverrides) } } catch { return DEFAULT_IMAGE_POLICY }
+  }
+  /**
    * The only settings write path. Synchronous (no await inside), so two writes can never interleave;
    * the base is the in-memory known fields AT CALL TIME (never a snapshot from before an await) and
    * unknown fields (e.g. the legacy `baseUrl`) are not written back. Throws when the disk write fails,
@@ -183,6 +191,8 @@ export class MagpieRuntime {
       ...(value.credentialUpdatePending ? { credentialUpdatePending: value.credentialUpdatePending } : {}),
       ...(value.sidebarUsage === true ? { sidebarUsage: true } : {}),
       ...(typeof value.sidebarRefreshMinutes === 'number' ? { sidebarRefreshMinutes: value.sidebarRefreshMinutes } : {}),
+      ...(typeof value.imageDefault === 'boolean' ? { imageDefault: value.imageDefault } : {}),
+      ...(value.imageOverrides && Object.keys(value.imageOverrides).length ? { imageOverrides: value.imageOverrides } : {}),
       ...(storedWindows ? { sidebarWindows: storedWindows } : {}),
       ...(this.owners.length ? { knownOwners: this.owners } : {}),
     }
@@ -360,7 +370,7 @@ export class MagpieRuntime {
           const error = new Error(httpError)
           Object.assign(error, { status: response.status }); throw error
         }
-        const catalog = mapCatalog(JSON.parse(JSON.stringify(await response.json()), (_key, value) => typeof value === 'string' ? this.redact(value) : value))
+        const catalog = mapCatalog(JSON.parse(JSON.stringify(await response.json()), (_key, value) => typeof value === 'string' ? this.redact(value) : value), this.imagePolicy)
         if (!this.isCurrent(gen)) return
         gen.catalog = catalog; gen.lastSyncAt = new Date().toISOString(); delete gen.lastSyncError; delete gen.lastSyncErrorKind
         this.commitOwners(gen, catalog)
@@ -604,8 +614,8 @@ export class MagpieRuntime {
       lines: viewLines, activeLineId: active?.line.id ?? null,
       pending: this.failedFields, retainedCredentials: this.retainedNow(config.lines),
       lastSyncAt: gen.lastSyncAt, lastSyncError: gen.lastSyncError, lastSyncErrorKind: gen.lastSyncErrorKind,
-      groups: [...new Set(gen.catalog.map(m => m.provider))].map(provider => ({ provider, models: gen.catalog.filter(m => m.provider === provider).map(m => ({ id: m.info.id, name: m.info.name, efforts: m.efforts, ...(m.routingKind ? { routingKind: m.routingKind } : {}) })) })),
-      visibleModels: this.store.value.visibleModels, defaultEfforts: this.store.value.defaultEfforts,
+      groups: [...new Set(gen.catalog.map(m => m.provider))].map(provider => ({ provider, models: gen.catalog.filter(m => m.provider === provider).map(m => ({ id: m.info.id, name: m.info.name, efforts: m.efforts, ...(m.routingKind ? { routingKind: m.routingKind } : {}), image: acceptsImagesFor(m, this.imagePolicy), imageDeclared: hasDeclaredModalities(m) })) })),
+      visibleModels: this.store.value.visibleModels, defaultEfforts: this.store.value.defaultEfforts, imageDefault: this.imagePolicy.default,
       sidebarUsage: this.store.value.sidebarUsage === true,
       sidebarRefreshMinutes: this.store.value.sidebarRefreshMinutes ?? 5,
       sidebarWindows: sidebarWindowsOf(this.store.value) ?? [...DEFAULT_SIDEBAR_WINDOWS],
@@ -614,12 +624,14 @@ export class MagpieRuntime {
     }))
   }
   /** Preference-only writes also persist the single clean schema (drops legacy fields). */
-  savePreferences(patch: { visibleModels?: Record<string, string[]>; defaultEfforts?: Record<string, string>; sidebarUsage?: boolean; sidebarRefreshMinutes?: number; sidebarWindows?: SidebarWindowKind[] }) {
+  savePreferences(patch: { visibleModels?: Record<string, string[]>; defaultEfforts?: Record<string, string>; imageDefault?: boolean; imageOverrides?: Record<string, boolean>; sidebarUsage?: boolean; sidebarRefreshMinutes?: number; sidebarWindows?: SidebarWindowKind[] }) {
     const config = this.loadConfig()
     this.writeSettings({
       lines: config.lines,
       visibleModels: patch.visibleModels ?? this.store.value.visibleModels ?? {},
       defaultEfforts: patch.defaultEfforts ?? this.store.value.defaultEfforts ?? {},
+      imageDefault: patch.imageDefault ?? this.store.value.imageDefault,
+      imageOverrides: patch.imageOverrides ?? this.store.value.imageOverrides,
       sidebarUsage: patch.sidebarUsage ?? this.store.value.sidebarUsage,
       sidebarRefreshMinutes: patch.sidebarRefreshMinutes ?? this.store.value.sidebarRefreshMinutes,
       sidebarWindows: patch.sidebarWindows ?? sidebarWindowsOf(this.store.value) ?? [...DEFAULT_SIDEBAR_WINDOWS],
@@ -701,7 +713,7 @@ export class MagpieRuntime {
       }
       if (controller.signal.aborted) return done({ kind: 'timeout' })
       let catalog: CatalogModel[]
-      try { catalog = mapCatalog(JSON.parse(text)) } catch { return done({ kind: 'invalid-catalog' }) }
+      try { catalog = mapCatalog(JSON.parse(text), this.imagePolicy) } catch { return done({ kind: 'invalid-catalog' }) }
       return done({ kind: 'ok', modelCount: catalog.length, models: catalog.map(model => ({ id: model.info.id })) })
     } catch (error) {
       if ((error as { redirect?: boolean }).redirect === true) return done({ kind: 'redirect' })

@@ -1,6 +1,8 @@
 export const models = { data: [
   { id: 'codex/gpt-6.1-sol', owned_by:'codex', reasoning_levels:['none','high'], native_endpoints:['/v1/responses'], modalities:{input:['text','image']}, service_tiers:[{id:'priority'}] },
-  { id: 'deepseek/deepseek-flash', owned_by:'deepseek', reasoning_levels:['none','high'], native_endpoints:[] },
+  // Declared text-only: the gateway answers `modalities`, and it refuses images. An empty
+  // declaration is a different thing — that one accepts images unless the user says otherwise.
+  { id: 'deepseek/deepseek-flash', owned_by:'deepseek', reasoning_levels:['none','high'], native_endpoints:[], modalities:{input:['text']} },
   { id:'claude/claude-haiku-5-5',modalities:{input:['image','text']} },
 ] }
 export const chatText = (text='hi', usage: unknown={prompt_tokens:1000,prompt_tokens_details:{cached_tokens:600,cache_write_tokens:50},completion_tokens:20}, finish='stop') => [

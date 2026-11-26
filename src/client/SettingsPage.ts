@@ -296,6 +296,7 @@ export function MagpieSettings({ api }: { api: Api }) {
       usage: h(UsageStatus, { cards, busy, ...(noteScope === undefined ? { notice, alert: usageAlert } : {}), onFetchAll: () => { void fetchAll() }, saving: savingSettings }) })
       : settingsError ? null : h('p', { role: 'status', className: 'dmg-hint' }, t('readingSettings')),
     settings ? h(SidebarUsagePreference, { settings, saving: savingSettings, mutateSettings }) : null,
+    settings ? h(ImagePreference, { settings, saving: savingSettings, mutateSettings }) : null,
     ...providerOrder(groups, cardList).map(provider => h(ProviderGroup, {
       key: provider, provider,
       group: groups.find(g => g.provider === provider),
@@ -756,8 +757,11 @@ function ProviderGroup({ provider, group, settings, cards, busy, saving, mutateS
       key: model.id, model, disabled: saving,
       visible: model.visible ?? (following || (saved[provider] ?? []).includes(model.id)),
       effort: settings?.defaultEfforts?.[model.id],
+      image: model.image === true,
+      imageDeclared: model.imageDeclared === true,
       onVisible: (visible: boolean) => setVisible(model, visible),
       onEffort: (effort: string | null) => { void post({ defaultEffort: { model: model.id, effort } }) },
+      onImage: (image: boolean) => { void post({ imageModel: { model: model.id, image } }) },
     }))) : null,
     cards.length ? h('div', { className: 'dmg-cards' }, ...cards.map(card => h(UsageCard, {
       key: cardKey(card), card, busy, disabled: saving,
@@ -770,20 +774,26 @@ function ProviderGroup({ provider, group, settings, cards, busy, saving, mutateS
     error ? h('p', { className: 'dmg-error', role: 'alert' }, error) : null)
 }
 
-function ModelLine({ model, visible, effort, disabled, onVisible, onEffort }: {
-  model: ModelRow; visible: boolean; effort: string | undefined; disabled: boolean
-  onVisible: (visible: boolean) => void; onEffort: (effort: string | null) => void
+function ModelLine({ model, visible, effort, image, imageDeclared, disabled, onVisible, onEffort, onImage }: {
+  model: ModelRow; visible: boolean; effort: string | undefined; image: boolean; imageDeclared: boolean; disabled: boolean
+  onVisible: (visible: boolean) => void; onEffort: (effort: string | null) => void; onImage: (image: boolean) => void
 }) {
   const efforts = model.efforts ?? []
   // Stale = saved but no longer offered by the gateway (design D7: the client judges this itself).
   const stale = effort !== undefined && !efforts.includes(effort)
   const label = model.name || model.id
   return h('div', { className: 'dmg-model', 'data-model': model.id },
-    h('label', null,
-      h('input', { type: 'checkbox', checked: visible, disabled, 'aria-label': t('showInPicker', { label }), onChange: (e: { target: { checked: boolean } }) => onVisible(e.target.checked) }),
+    h('label', { className: 'dmg-model-name' },
+      h('input', { type: 'checkbox', checked: visible, disabled, 'data-role': 'visible', 'aria-label': t('showInPicker', { label }), onChange: (e: { target: { checked: boolean } }) => onVisible(e.target.checked) }),
       h('span', null, label),
       model.name && model.name !== model.id ? h('code', null, model.id) : null,
       model.routingKind ? h('span', { className: 'dmg-hint', 'data-routing-kind': model.routingKind }, t(model.routingKind === 'auto' ? 'routingKindAuto' : 'routingKindCustom')) : null),
+    // An empty gateway declaration is a gap the user may fill; an explicit one is a fact
+    // and the switch only reports it. The switch sits next to the effort select as an icon.
+    h('label', { className: 'dmg-image', title: imageDeclared ? t('imageInputDeclared', { label }) : t('imageInputAria', { label }), 'data-image-declared': imageDeclared ? 'true' : 'false' },
+      h('input', { type: 'checkbox', checked: image, disabled: disabled || imageDeclared, 'data-role': 'image', 'aria-label': imageDeclared ? t('imageInputDeclared', { label }) : t('imageInputAria', { label }), onChange: (e: { target: { checked: boolean } }) => onImage(e.target.checked) }),
+      h('span', { className: 'dmg-image-glyph', 'aria-hidden': 'true' },
+        h('span', { className: 'dmg-image-icon' }))),
     efforts.length ? h('select', {
       className: 'dmg-select', 'aria-label': t('defaultEffortAria', { label }), disabled,
       value: effort ?? '', onChange: (e: { target: { value: string } }) => onEffort(e.target.value === '' ? null : e.target.value),
@@ -791,6 +801,30 @@ function ModelLine({ model, visible, effort, disabled, onVisible, onEffort }: {
     h('option', { value: '' }, t('defaultEffortNone')),
     stale ? h('option', { value: effort, disabled: true }, t('effortStale', { effort })) : null,
     ...efforts.map(id => h('option', { key: id, value: id }, id))) : null)
+}
+
+/**
+ * The global image policy: a model the gateway declared nothing about accepts
+ * images unless the user says otherwise, and one model row can still except
+ * itself. A gateway declaration is never overruled from here.
+ */
+function ImagePreference({ settings, saving, mutateSettings }: {
+  settings: SettingsView; saving: boolean; mutateSettings: SettingsMutation
+}) {
+  const [failed, setFailed] = useState('')
+  const enabled = settings.imageDefault !== false
+  const toggle = async () => {
+    setFailed('')
+    const result = await mutateSettings({ imageDefault: !enabled })
+    if (result?.error) setFailed(result.error)
+  }
+  return h('section', { className: 'dmg-panel', 'data-image-default': '' },
+    h('h3', null, t('imageDefaultTitle')),
+    h('label', null,
+      h('input', { type: 'checkbox', checked: enabled, disabled: saving, 'aria-label': t('imageDefaultAria'), onChange: () => { void toggle() } }),
+      h('span', null, t('imageDefaultLabel'))),
+    h('p', { className: 'dmg-hint' }, t('imageDefaultHint')),
+    failed ? h('p', { className: 'dmg-error', role: 'alert' }, failed) : null)
 }
 
 /** Copy for one checkbox in the window selection. */
